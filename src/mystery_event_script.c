@@ -226,6 +226,7 @@ bool8 MEScrCmd_runscript(struct ScriptContext *ctx)
 
 bool8 MEScrCmd_setenigmaberry(struct ScriptContext *ctx)
 {
+    #ifndef FREE_ENIGMA_BERRY
     u8 *str;
     const u8 *message;
     bool32 haveBerry = IsEnigmaBerryValid();
@@ -257,8 +258,8 @@ bool8 MEScrCmd_setenigmaberry(struct ScriptContext *ctx)
     if (IsEnigmaBerryValid() == TRUE)
         VarSet(VAR_ENIGMA_BERRY_AVAILABLE, 1);
     else
-        ctx->mStatus = MEVENT_STATUS_LOAD_ERROR;
-
+        ctx->data[2] = 1;
+    #endif
     return FALSE;
 }
 
