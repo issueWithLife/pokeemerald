@@ -76,17 +76,11 @@ MAP_NAME := $(ROM_NAME:.gba=.map)
 MODERN_ELF_NAME := $(MODERN_ROM_NAME:.gba=.elf)
 MODERN_MAP_NAME := $(MODERN_ROM_NAME:.gba=.map)
 
-# Pick our active variables
-ifeq ($(MODERN),0)
-  ROM := $(ROM_NAME)
-  OBJ_DIR := $(OBJ_DIR_NAME)
-else
-  ROM := $(MODERN_ROM_NAME)
-  OBJ_DIR := $(MODERN_OBJ_DIR_NAME)
-endif
-ELF := $(ROM:.gba=.elf)
-MAP := $(ROM:.gba=.map)
-SYM := $(ROM:.gba=.sym)
+SHELL := bash -o pipefail
+
+ELF = $(ROM:.gba=.elf)
+MAP = $(ROM:.gba=.map)
+SYM = $(ROM:.gba=.sym)
 
 # Commonly used directories
 C_SUBDIR = src
