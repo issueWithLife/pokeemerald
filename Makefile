@@ -301,18 +301,50 @@ endif
 # As a side effect, they're evaluated immediately instead of when the rule is invoked.
 # It doesn't look like $(shell) can be deferred so there might not be a better way (Icedude_907: there is soon).
 
-# For C dependencies.
-# Args: $1 = Output file without extension (build/assets/src/data), $2 = Input file (src/data.c)
+ifeq ($(SCAN_DEPS),1)
+ifeq ($(NODEP),1)
+$(C_BUILDDIR)/%.o: $(C_SUBDIR)/%.c
+ifeq (,$(KEEP_TEMPS))
+	@echo "$(CC1) <flags> -o $@ $<"
+	@$(CPP) $(CPPFLAGS) $< | $(PREPROC) -i $< charmap.txt | $(CC1) $(CFLAGS) -o - - | cat - <(echo -e ".text\n\t.align\t2, 0") | $(AS) $(ASFLAGS) -o $@ -
+else
+	@$(CPP) $(CPPFLAGS) $< -o $(C_BUILDDIR)/$*.i
+	@$(PREPROC) $(C_BUILDDIR)/$*.i charmap.txt | $(CC1) $(CFLAGS) -o $(C_BUILDDIR)/$*.s
+	@echo -e ".text\n\t.align\t2, 0\n" >> $(C_BUILDDIR)/$*.s
+	$(AS) $(ASFLAGS) -o $@ $(C_BUILDDIR)/$*.s
+endif
+else
 define C_DEP
-$(call C_DEP_IMPL,$1,$2,$1)
+$1: $2 $$(shell $(SCANINC) -I include -I tools/agbcc/include -I gflib $2)
+ifeq (,$$(KEEP_TEMPS))
+	@echo "$$(CC1) <flags> -o $$@ $$<"
+	@$$(CPP) $$(CPPFLAGS) $$< | $$(PREPROC) -i $$< charmap.txt | $$(CC1) $$(CFLAGS) -o - - | cat - <(echo -e ".text\n\t.align\t2, 0") | $$(AS) $$(ASFLAGS) -o $$@ -
+else
+	@$$(CPP) $$(CPPFLAGS) $$< -o $$(C_BUILDDIR)/$3.i
+	@$$(PREPROC) $$(C_BUILDDIR)/$3.i charmap.txt | $$(CC1) $$(CFLAGS) -o $$(C_BUILDDIR)/$3.s
+	@echo -e ".text\n\t.align\t2, 0\n" >> $$(C_BUILDDIR)/$3.s
+	$$(AS) $$(ASFLAGS) -o $$@ $$(C_BUILDDIR)/$3.s
+endif
 endef
 # Internal implementation details.
 # $1: Output file without extension, $2 input file, $3 temp path (if keeping)
 define C_DEP_IMPL
 $1.o: $2
 ifeq (,$(KEEP_TEMPS))
+	@echo "$(CC1) <flags> -o $@ $<"
+	@$(CPP) $(CPPFLAGS) $< | $(PREPROC) -i $< charmap.txt | $(CC1) $(CFLAGS) -o - - | cat - <(echo -e ".text\n\t.align\t2, 0") | $(AS) $(ASFLAGS) -o $@ -
+else
+	@$(CPP) $(CPPFLAGS) $< -o $(GFLIB_BUILDDIR)/$*.i
+	@$(PREPROC) $(GFLIB_BUILDDIR)/$*.i charmap.txt | $(CC1) $(CFLAGS) -o $(GFLIB_BUILDDIR)/$*.s
+	@echo -e ".text\n\t.align\t2, 0\n" >> $(GFLIB_BUILDDIR)/$*.s
+	$(AS) $(ASFLAGS) -o $@ $(GFLIB_BUILDDIR)/$*.s
+endif
+else
+define GFLIB_DEP
+$1: $2 $$(shell $(SCANINC) -I include -I tools/agbcc/include -I gflib $2)
+ifeq (,$$(KEEP_TEMPS))
 	@echo "$$(CC1) <flags> -o $$@ $$<"
-	@$$(CPP) $$(CPPFLAGS) $$< | $$(PREPROC) $$< charmap.txt -i | $$(CC1) $$(CFLAGS) -o - - | cat - <(echo -e ".text\n\t.align\t2, 0") | $$(AS) $$(ASFLAGS) -o $$@ -
+	@$$(CPP) $$(CPPFLAGS) $$< | $$(PREPROC) -i $$< charmap.txt | $$(CC1) $$(CFLAGS) -o - - | cat - <(echo -e ".text\n\t.align\t2, 0") | $$(AS) $$(ASFLAGS) -o $$@ -
 else
 	@$$(CPP) $$(CPPFLAGS) $$< -o $3.i
 	@$$(PREPROC) $3.i charmap.txt | $$(CC1) $$(CFLAGS) -o $3.s
@@ -337,8 +369,21 @@ $(foreach src,$(C_SRCS),$(eval $(call C_DEP,$(OBJ_DIR)/$(basename $(src)),$(src)
 $(foreach src,$(GFLIB_SRCS),$(eval $(call C_DEP,$(OBJ_DIR)/$(basename $(src)),$(src))))
 endif
 
-# Similar methodology for Assembly files
-# $1: Output path without extension, $2: Input file (`*.s`)
+ifeq ($(NODEP),1)
+$(C_BUILDDIR)/%.o: $(C_SUBDIR)/%.s
+	$(PREPROC) $< charmap.txt | $(CPP) -I include - | $(PREPROC) -i $$< charmap.txt | $(AS) $(ASFLAGS) -o $@
+else
+define SRC_ASM_DATA_DEP
+$1: $2 $$(shell $(SCANINC) -I include -I "" $2)
+	$$(PREPROC) $$< charmap.txt | $$(CPP) -I include - | $$(PREPROC) -ie $$< charmap.txt | $$(AS) $$(ASFLAGS) -o $$@
+endef
+$(foreach src, $(C_ASM_SRCS), $(eval $(call SRC_ASM_DATA_DEP,$(patsubst $(C_SUBDIR)/%.s,$(C_BUILDDIR)/%.o, $(src)),$(src))))
+endif
+
+ifeq ($(NODEP),1)
+$(ASM_BUILDDIR)/%.o: $(ASM_SUBDIR)/%.s
+	$(AS) $(ASFLAGS) -o $@ $<
+else
 define ASM_DEP
 $1.o: $2
 	$$(AS) $$(ASFLAGS) -o $$@ $$<
@@ -359,9 +404,8 @@ endef
 
 # Dummy rules or real rules
 ifeq ($(NODEP),1)
-$(eval $(call ASM_DEP,$(ASM_BUILDDIR)/%,$(ASM_SUBDIR)/%.s))
-$(eval $(call ASM_DEP_PREPROC,$(C_BUILDDIR)/%,$(C_SUBDIR)/%.s))
-$(eval $(call ASM_DEP_PREPROC,$(DATA_ASM_BUILDDIR)/%,$(DATA_ASM_SUBDIR)/%.s))
+$(DATA_ASM_BUILDDIR)/%.o: $(DATA_ASM_SUBDIR)/%.s
+	$(PREPROC) $< charmap.txt | $(CPP) -I include - | $(PREPROC) -ie $$< charmap.txt | $(AS) $(ASFLAGS) -o $@
 else
 $(foreach src, $(ASM_SRCS), $(eval $(call ASM_DEP,$(src:%.s=$(OBJ_DIR)/%),$(src))))
 $(foreach src, $(C_ASM_SRCS), $(eval $(call ASM_DEP_PREPROC,$(src:%.s=$(OBJ_DIR)/%),$(src))))
