@@ -1,4 +1,44 @@
-# GBA rom header
+TOOLCHAIN := $(DEVKITARM)
+COMPARE ?= 0
+
+ifeq (compare,$(MAKECMDGOALS))
+  COMPARE := 1
+endif
+
+# Default make rule
+all: rom
+
+# don't use dkP's base_tools anymore
+# because the redefinition of $(CC) conflicts
+# with when we want to use $(CC) to preprocess files
+# thus, manually create the variables for the bin
+# files, or use arm-none-eabi binaries on the system
+# if dkP is not installed on this system
+
+ifneq (,$(TOOLCHAIN))
+ifneq ($(wildcard $(TOOLCHAIN)/bin),)
+export PATH := $(TOOLCHAIN)/bin:$(PATH)
+endif
+endif
+
+PREFIX := arm-none-eabi-
+OBJCOPY := $(PREFIX)objcopy
+OBJDUMP := $(PREFIX)objdump
+AS := $(PREFIX)as
+
+LD := $(PREFIX)ld
+
+# note: the makefile must be set up so MODERNCC is never called
+# if MODERN=0
+MODERNCC := $(PREFIX)gcc
+PATH_MODERNCC := PATH="$(PATH)" $(MODERNCC)
+
+ifeq ($(OS),Windows_NT)
+EXE := .exe
+else
+EXE :=
+endif
+
 TITLE       := POKEMON EMER
 GAME_CODE   := BPEE
 MAKER_CODE  := 01
@@ -136,7 +176,8 @@ LDFLAGS = -Map ../../$(MAP)
 # Variable filled out in other make files
 AUTO_GEN_TARGETS :=
 include make_tools.mk
-# Tool executables
+
+SHA1 := $(shell { command -v sha1sum || command -v shasum; } 2>/dev/null) -c
 GFX       := $(TOOLS_DIR)/gbagfx/gbagfx$(EXE)
 AIF       := $(TOOLS_DIR)/aif2pcm/aif2pcm$(EXE)
 MID       := $(TOOLS_DIR)/mid2agb/mid2agb$(EXE)
@@ -148,7 +189,6 @@ MAPJSON   := $(TOOLS_DIR)/mapjson/mapjson$(EXE)
 JSONPROC  := $(TOOLS_DIR)/jsonproc/jsonproc$(EXE)
 
 PERL := perl
-SHA1 := $(shell { command -v sha1sum || command -v shasum; } 2>/dev/null) -c
 
 MAKEFLAGS += --no-print-directory
 
@@ -161,21 +201,31 @@ MAKEFLAGS += --no-print-directory
 # Secondary expansion is required for dependency variables in object rules.
 .SECONDEXPANSION:
 
-RULES_NO_SCAN += libagbsyscall clean clean-assets tidy tidymodern tidynonmodern generated clean-generated
-.PHONY: all rom modern compare
-.PHONY: $(RULES_NO_SCAN)
+.PHONY: all rom clean compare tidy mostlyclean libagbsyscall modern tidymodern tidynonmodern
 
 infoshell = $(foreach line, $(shell $1 | sed "s/ /__SPACE__/g"), $(info $(subst __SPACE__, ,$(line))))
 
-# Check if we need to scan dependencies based on the chosen rule OR user preference
-NODEP ?= 0
-# Check if we need to pre-build tools and generate assets based on the chosen rule.
-SETUP_PREREQS ?= 1
-# Disable dependency scanning for rules that don't need it.
-ifneq (,$(MAKECMDGOALS))
-  ifeq (,$(filter-out $(RULES_NO_SCAN),$(MAKECMDGOALS)))
-    NODEP := 1
-    SETUP_PREREQS := 0
+# Build tools when building the rom
+# Disable dependency scanning for clean/tidy/tools
+# Use a separate minimal makefile for speed
+# Since we don't need to reload most of this makefile
+ifeq (,$(filter-out all rom compare modern libagbsyscall syms,$(MAKECMDGOALS)))
+$(call infoshell, $(MAKE) -f make_tools.mk)
+$(call infoshell, $(MAKE) generated)
+else
+NODEP ?= 1
+endif
+
+# check if we need to scan dependencies based on the rule
+ifeq (,$(MAKECMDGOALS))
+  SCAN_DEPS ?= 1
+else
+  # clean, tidy, tools, mostlyclean, clean-tools, $(TOOLDIRS), tidymodern, tidynonmodern don't even build the ROM
+  # libagbsyscall does its own thing
+  ifeq (,$(filter-out clean tidy tools mostlyclean clean-tools $(TOOLDIRS) tidymodern tidynonmodern libagbsyscall,$(MAKECMDGOALS)))
+    SCAN_DEPS ?= 0
+  else
+    SCAN_DEPS ?= 1
   endif
 endif
 
@@ -219,11 +269,8 @@ OBJS_REL := $(patsubst $(OBJ_DIR)/%,%,$(OBJS))
 SUBDIRS  := $(sort $(dir $(OBJS)))
 $(shell mkdir -p $(SUBDIRS))
 
-# Pretend rules that are actually flags defer to `make all`
-modern: all
-compare: all
+syms: $(SYM)
 
-# Other rules
 rom: $(ROM)
 ifeq ($(COMPARE),1)
 	@$(SHA1) rom.sha1
@@ -234,7 +281,8 @@ syms: $(SYM)
 clean: tidy clean-tools clean-generated clean-assets
 	@$(MAKE) clean -C libagbsyscall
 
-clean-assets:
+mostlyclean: tidynonmodern tidymodern
+	find sound -iname '*.bin' -exec rm {} +
 	rm -f $(MID_SUBDIR)/*.s
 	rm -f $(DATA_ASM_SUBDIR)/layouts/layouts.inc $(DATA_ASM_SUBDIR)/layouts/layouts_table.inc
 	rm -f $(DATA_ASM_SUBDIR)/maps/connections.inc $(DATA_ASM_SUBDIR)/maps/events.inc $(DATA_ASM_SUBDIR)/maps/groups.inc $(DATA_ASM_SUBDIR)/maps/headers.inc
@@ -259,6 +307,8 @@ include spritesheet_rules.mk
 include json_data_rules.mk
 include songs.mk
 
+generated: $(AUTO_GEN_TARGETS)
+
 %.s: ;
 %.png: ;
 %.pal: ;
@@ -280,15 +330,17 @@ clean-generated:
 	-rm -f $(AUTO_GEN_TARGETS)
 
 ifeq ($(MODERN),0)
-$(C_BUILDDIR)/libc.o: CC1 := tools/agbcc/bin/old_agbcc$(EXE)
+$(C_BUILDDIR)/libc.o: CC1 := $(TOOLS_DIR)/agbcc/bin/old_agbcc$(EXE)
 $(C_BUILDDIR)/libc.o: CFLAGS := -O2
 $(C_BUILDDIR)/siirtc.o: CFLAGS := -mthumb-interwork
 $(C_BUILDDIR)/agb_flash.o: CFLAGS := -O -mthumb-interwork
 $(C_BUILDDIR)/agb_flash_1m.o: CFLAGS := -O -mthumb-interwork
 $(C_BUILDDIR)/agb_flash_mx.o: CFLAGS := -O -mthumb-interwork
-$(C_BUILDDIR)/m4a.o: CC1 := tools/agbcc/bin/old_agbcc$(EXE)
+
+$(C_BUILDDIR)/m4a.o: CC1 := $(TOOLS_DIR)/agbcc/bin/old_agbcc$(EXE)
+
 $(C_BUILDDIR)/record_mixing.o: CFLAGS += -ffreestanding
-$(C_BUILDDIR)/librfu_intr.o: CC1 := tools/agbcc/bin/agbcc_arm$(EXE)
+$(C_BUILDDIR)/librfu_intr.o: CC1 := $(TOOLS_DIR)/agbcc/bin/agbcc_arm$(EXE)
 $(C_BUILDDIR)/librfu_intr.o: CFLAGS := -O2 -mthumb-interwork -quiet
 else
 $(C_BUILDDIR)/librfu_intr.o: CFLAGS := -mthumb-interwork -O2 -mabi=apcs-gnu -mtune=arm7tdmi -march=armv4t -fno-toplevel-reorder -Wno-pointer-to-int-cast
@@ -315,7 +367,7 @@ else
 endif
 else
 define C_DEP
-$1: $2 $$(shell $(SCANINC) -I include -I tools/agbcc/include -I gflib $2)
+$1: $2 $$(shell $(SCANINC) -I include -I $(TOOLS_DIR)/agbcc/include -I gflib $2)
 ifeq (,$$(KEEP_TEMPS))
 	@echo "$$(CC1) <flags> -o $$@ $$<"
 	@$$(CPP) $$(CPPFLAGS) $$< | $$(PREPROC) -i $$< charmap.txt | $$(CC1) $$(CFLAGS) -o - - | cat - <(echo -e ".text\n\t.align\t2, 0") | $$(AS) $$(ASFLAGS) -o $$@ -
@@ -341,7 +393,7 @@ else
 endif
 else
 define GFLIB_DEP
-$1: $2 $$(shell $(SCANINC) -I include -I tools/agbcc/include -I gflib $2)
+$1: $2 $$(shell $(SCANINC) -I include -I $(TOOLS_DIR)/agbcc/include -I gflib $2)
 ifeq (,$$(KEEP_TEMPS))
 	@echo "$$(CC1) <flags> -o $$@ $$<"
 	@$$(CPP) $$(CPPFLAGS) $$< | $$(PREPROC) -i $$< charmap.txt | $$(CC1) $$(CFLAGS) -o - - | cat - <(echo -e ".text\n\t.align\t2, 0") | $$(AS) $$(ASFLAGS) -o $$@ -
